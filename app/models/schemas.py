@@ -89,3 +89,70 @@ class SynonymResponse:
     levels: List[SynonymLevelResult]
     notes: Dict[str, str]
     context_examples: List[str]
+
+
+@dataclass(frozen=True)
+class PlacementAssessmentRequest:
+    user_id: str
+    correct_answers: int
+    total_questions: int
+    average_response_seconds: float
+    target_language: str = "en"
+
+
+@dataclass(frozen=True)
+class PlacementAssessmentResponse:
+    user_id: str
+    cefr_level: str
+    score_percent: float
+    recommended_track: str
+    weak_skills: List[str]
+    next_7_day_plan: List[str]
+
+
+@dataclass(frozen=True)
+class VocabReviewItem:
+    word: str
+    last_score: int
+    days_since_review: int
+    seen_count: int
+
+
+@dataclass(frozen=True)
+class SpacedRepetitionRequest:
+    user_id: str
+    items: List[VocabReviewItem]
+
+
+@dataclass(frozen=True)
+class ScheduledReviewItem:
+    word: str
+    priority: str
+    next_review_in_hours: int
+    reason: str
+
+
+@dataclass(frozen=True)
+class SpacedRepetitionResponse:
+    user_id: str
+    scheduled_items: List[ScheduledReviewItem]
+    estimated_session_minutes: int
+
+
+@dataclass(frozen=True)
+class MonetizationAdviceRequest:
+    user_id: str
+    streak_days: int
+    weekly_active_days: int
+    completed_lessons: int
+    referral_count: int = 0
+
+
+@dataclass(frozen=True)
+class MonetizationAdviceResponse:
+    user_id: str
+    recommended_plan: str
+    conversion_probability: float
+    offer: str
+    offer_reason: str
+    features_to_unlock: List[str]

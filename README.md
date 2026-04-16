@@ -48,6 +48,15 @@ python3 app/main.py
     - level_4_advanced
   - Includes usage hints and context examples by level.
 
+- `POST /api/v1/assessment/placement`
+  - Estimates CEFR level from diagnostic results and returns 7-day improvement plan.
+
+- `POST /api/v1/learning/spaced-repetition/schedule`
+  - Schedules vocabulary reviews by memory risk and returns session duration estimate.
+
+- `POST /api/v1/growth/monetization-advice`
+  - Returns plan recommendation and conversion probability for premium upsell logic.
+
 ## Quick examples
 
 Unified lesson request:
