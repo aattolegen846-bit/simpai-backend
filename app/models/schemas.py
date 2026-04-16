@@ -156,3 +156,57 @@ class MonetizationAdviceResponse:
     offer: str
     offer_reason: str
     features_to_unlock: List[str]
+
+
+@dataclass(frozen=True)
+class SubscriptionCreateRequest:
+    user_id: str
+    plan_id: str
+    billing_cycle: str
+    payment_provider: str = "stripe"
+
+
+@dataclass(frozen=True)
+class SubscriptionCreateResponse:
+    user_id: str
+    subscription_id: str
+    status: str
+    checkout_url: str
+
+
+@dataclass(frozen=True)
+class WebhookEventResponse:
+    accepted: bool
+    event_type: str
+    message: str
+
+
+@dataclass(frozen=True)
+class ReferralCreateResponse:
+    user_id: str
+    referral_code: str
+    share_link: str
+
+
+@dataclass(frozen=True)
+class ReferralRedeemRequest:
+    new_user_id: str
+    referral_code: str
+
+
+@dataclass(frozen=True)
+class ReferralRedeemResponse:
+    new_user_id: str
+    referrer_user_id: str
+    reward_points_granted: int
+    redeemed: bool
+
+
+@dataclass(frozen=True)
+class CohortAnalyticsResponse:
+    cohort: str
+    total_users: int
+    activated_users: int
+    activation_rate: float
+    paid_users: int
+    paid_conversion_rate: float

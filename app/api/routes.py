@@ -4,15 +4,19 @@ from enum import Enum
 from flask import Blueprint, jsonify, request
 
 from app.models.schemas import (
+    CohortAnalyticsResponse,
     MonetizationAdviceRequest,
+    ReferralRedeemRequest,
     PlacementAssessmentRequest,
     SentenceUsageRequest,
     SkillLevel,
     SpacedRepetitionRequest,
+    SubscriptionCreateRequest,
     UnifiedLessonRequest,
     VocabReviewItem,
 )
 from app.services.growth_service import GrowthService
+from app.services.revenue_service import RevenueService
 from app.services.sentence_usage_service import SentenceUsageService
 from app.services.synonym_service import SynonymService
 from app.services.unified_learning_service import UnifiedLearningService
@@ -23,6 +27,8 @@ learning_service = UnifiedLearningService()
 sentence_service = SentenceUsageService()
 synonym_service = SynonymService()
 growth_service = GrowthService()
+revenue_service = RevenueService()
+WEBHOOK_SECRET = "dev_stripe_webhook_secret"
 
 
 def _json_ready(payload):
@@ -185,4 +191,69 @@ def monetization_advice():
     except ValueError as error:
         return _bad_request(str(error))
 
+    return jsonify(_json_ready(asdict(response)))
+
+
+@router.post("/billing/subscriptions")
+def create_subscription():
+    payload = request.get_json(force=True)
+    required_fields = ["user_id", "plan_id", "billing_cycle"]
+    for field in required_fields:
+        if field not in payload:
+            return _bad_request(f"Missing required field: {field}")
+    model = SubscriptionCreateRequest(
+        user_id=str(payload["user_id"]),
+        plan_id=str(payload["plan_id"]),
+        billing_cycle=str(payload["billing_cycle"]),
+        payment_provider=str(payload.get("payment_provider", "stripe")),
+    )
+    response = revenue_service.create_subscription(model)
+    return jsonify(_json_ready(asdict(response)))
+
+
+@router.post("/billing/webhooks/stripe")
+def stripe_webhook():
+    signature = request.headers.get("X-Webhook-Secret")
+    if signature != WEBHOOK_SECRET:
+        return jsonify({"error": "Invalid webhook signature"}), 401
+
+    payload = request.get_json(force=True)
+    event_type = str(payload.get("event_type", "unknown"))
+    event_payload = payload.get("data", {})
+    response = revenue_service.handle_webhook(event_type=event_type, payload=event_payload)
+    return jsonify(_json_ready(asdict(response)))
+
+
+@router.post("/referrals/create")
+def create_referral():
+    payload = request.get_json(force=True)
+    user_id = payload.get("user_id")
+    if not user_id:
+        return _bad_request("Missing required field: user_id")
+    response = revenue_service.create_referral_code(str(user_id))
+    return jsonify(_json_ready(asdict(response)))
+
+
+@router.post("/referrals/redeem")
+def redeem_referral():
+    payload = request.get_json(force=True)
+    if "new_user_id" not in payload or "referral_code" not in payload:
+        return _bad_request("Missing required fields: new_user_id, referral_code")
+    model = ReferralRedeemRequest(
+        new_user_id=str(payload["new_user_id"]),
+        referral_code=str(payload["referral_code"]),
+    )
+    try:
+        response = revenue_service.redeem_referral(model)
+    except ValueError as error:
+        return _bad_request(str(error))
+    return jsonify(_json_ready(asdict(response)))
+
+
+@router.get("/analytics/cohort")
+def cohort_analytics():
+    cohort = request.args.get("cohort")
+    if not cohort:
+        return _bad_request("Missing required query param: cohort (YYYY-MM)")
+    response: CohortAnalyticsResponse = revenue_service.cohort_analytics(cohort)
     return jsonify(_json_ready(asdict(response)))

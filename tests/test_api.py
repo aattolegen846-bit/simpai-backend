@@ -106,3 +106,50 @@ def test_monetization_advice() -> None:
     data = response.get_json()
     assert data["recommended_plan"] in {"starter_plus", "monthly_pro", "annual_pro"}
     assert data["conversion_probability"] > 0
+
+
+def test_subscription_create() -> None:
+    payload = {"user_id": "u-bill", "plan_id": "monthly_pro", "billing_cycle": "monthly"}
+    response = client.post("/api/v1/billing/subscriptions", json=payload)
+    assert response.status_code == 200
+    data = response.get_json()
+    assert data["status"] == "pending_checkout"
+    assert data["subscription_id"].startswith("sub_")
+
+
+def test_stripe_webhook() -> None:
+    payload = {
+        "event_type": "invoice.paid",
+        "data": {"user_id": "u-bill"},
+    }
+    response = client.post(
+        "/api/v1/billing/webhooks/stripe",
+        json=payload,
+        headers={"X-Webhook-Secret": "dev_stripe_webhook_secret"},
+    )
+    assert response.status_code == 200
+    assert response.get_json()["accepted"] is True
+
+
+def test_referral_flow() -> None:
+    created = client.post("/api/v1/referrals/create", json={"user_id": "ref-1"})
+    assert created.status_code == 200
+    code = created.get_json()["referral_code"]
+
+    redeemed = client.post(
+        "/api/v1/referrals/redeem",
+        json={"new_user_id": "new-100", "referral_code": code},
+    )
+    assert redeemed.status_code == 200
+    data = redeemed.get_json()
+    assert data["redeemed"] is True
+    assert data["reward_points_granted"] == 100
+
+
+def test_cohort_analytics() -> None:
+    cohort = "2026-04"
+    response = client.get(f"/api/v1/analytics/cohort?cohort={cohort}")
+    assert response.status_code == 200
+    data = response.get_json()
+    assert data["cohort"] == cohort
+    assert "paid_conversion_rate" in data

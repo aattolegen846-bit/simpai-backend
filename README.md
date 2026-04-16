@@ -57,6 +57,18 @@ python3 app/main.py
 - `POST /api/v1/growth/monetization-advice`
   - Returns plan recommendation and conversion probability for premium upsell logic.
 
+- `POST /api/v1/billing/subscriptions`
+  - Creates subscription checkout intent and returns checkout URL.
+
+- `POST /api/v1/billing/webhooks/stripe`
+  - Handles Stripe-style webhook events (configured with `X-Webhook-Secret` header).
+
+- `POST /api/v1/referrals/create` and `POST /api/v1/referrals/redeem`
+  - Creates referral codes and redeems referral rewards.
+
+- `GET /api/v1/analytics/cohort?cohort=YYYY-MM`
+  - Returns activation and paid conversion metrics for a cohort period.
+
 ## Quick examples
 
 Unified lesson request:
