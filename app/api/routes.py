@@ -1,5 +1,6 @@
 from dataclasses import asdict
 from enum import Enum
+from functools import wraps
 
 from flask import Blueprint, jsonify, request
 
@@ -17,14 +18,119 @@ from app.models.schemas import (
     UnifiedLessonRequest,
     VocabReviewItem,
 )
+from app.services.auth_service import AuthService
 from app.services.adaptive_learning_service import AdaptiveLearningService
 from app.services.growth_service import GrowthService
 from app.services.revenue_service import RevenueService
 from app.services.sentence_usage_service import SentenceUsageService
 from app.services.synonym_service import SynonymService
 from app.services.unified_learning_service import UnifiedLearningService
+from app.models.user import User
+from app.services.ai_tutor_service import AITutorService
+from app.services.social_service import SocialService
 
 router = Blueprint("learning-platform", __name__, url_prefix="/api/v1")
+
+auth_service = AuthService()
+ai_tutor_service = AITutorService()
+social_service = SocialService()
+
+def token_required(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        token = request.headers.get("Authorization")
+        if not token:
+            return jsonify({"error": "Token is missing"}), 401
+        
+        # Expecting 'Bearer <token>'
+        if token.startswith("Bearer "):
+            token = token.split(" ")[1]
+            
+        user_id = auth_service.decode_token(token)
+        if not user_id:
+            return jsonify({"error": "Token is invalid"}), 401
+            
+        current_user = User.query.get(user_id)
+        if not current_user:
+            return jsonify({"error": "User not found"}), 401
+            
+        return f(current_user, *args, **kwargs)
+    return decorated
+
+
+@router.post("/auth/register")
+def register():
+    payload = request.get_json(force=True)
+    username = payload.get("username")
+    email = payload.get("email")
+    password = payload.get("password")
+    
+    if not all([username, email, password]):
+        return _bad_request("Missing fields")
+        
+    success, message = auth_service.register_user(username, email, password)
+    if not success:
+        return _bad_request(message)
+        
+    return jsonify({"message": message}), 201
+
+
+@router.post("/auth/login")
+def login():
+    payload = request.get_json(force=True)
+    identifier = payload.get("identifier")  # username or email
+    password = payload.get("password")
+    
+    user = auth_service.authenticate_user(identifier, password)
+    if not user:
+        return jsonify({"error": "Invalid credentials"}), 401
+        
+    token = auth_service.generate_token(user.id)
+    return jsonify({
+        "token": token,
+        "user": user.to_dict()
+    })
+
+
+@router.get("/social/leaderboard")
+def get_leaderboard():
+    limit = request.args.get("limit", 10, type=int)
+    leaderboard = social_service.get_leaderboard(limit)
+    return jsonify(leaderboard)
+
+
+@router.post("/ai/explain")
+@token_required
+def ai_explain(current_user):
+    payload = request.get_json(force=True)
+    sentence = payload.get("sentence")
+    target_lang = payload.get("target_language", "en")
+    native_lang = payload.get("native_language", "kk")
+    
+    if not sentence:
+        return _bad_request("Missing sentence")
+        
+    explanation = ai_tutor_service.explain_sentence(sentence, target_lang, native_lang)
+    return jsonify(asdict(explanation))
+
+
+@router.post("/ai/feedback")
+@token_required
+def ai_feedback(current_user):
+    payload = request.get_json(force=True)
+    user_input = payload.get("user_input")
+    target_text = payload.get("target_text")
+    
+    if not user_input or not target_text:
+        return _bad_request("Missing fields")
+        
+    feedback = ai_tutor_service.provide_feedback(user_input, target_text)
+    
+    # Award points for effort
+    social_service.award_points(current_user.id, 10)
+    
+    return jsonify(feedback)
+
 
 learning_service = UnifiedLearningService()
 sentence_service = SentenceUsageService()

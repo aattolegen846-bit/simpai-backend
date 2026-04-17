@@ -1,6 +1,8 @@
 from typing import Dict, List
 from uuid import uuid4
 
+from app.database import db
+from app.models.db_models import UserSkill
 from app.models.schemas import (
     LessonBlock,
     NextLessonRequest,
@@ -21,32 +23,37 @@ _DRILLS: Dict[str, str] = {
 
 
 class AdaptiveLearningService:
-    def __init__(self) -> None:
-        self._store: Dict[str, Dict[str, float]] = {}
-
     def update_weak_skills(
         self, user_id: str, observations: List[SkillObservation]
     ) -> WeakSkillsResponse:
-        skill_scores = self._store.setdefault(user_id, {})
+        uid = int(user_id)
         for obs in observations:
             if obs.attempts <= 0:
                 continue
             ratio = min(1.0, max(0.0, obs.mistakes / obs.attempts))
-            previous = skill_scores.get(obs.skill, 0.0)
-            # EMA smoothing to avoid unstable jumps after single attempts
-            skill_scores[obs.skill] = round((previous * 0.65) + (ratio * 0.35), 3)
+            
+            existing = UserSkill.query.filter_by(user_id=uid, skill=obs.skill).first()
+            if existing:
+                # EMA smoothing
+                existing.score = round((existing.score * 0.65) + (ratio * 0.35), 3)
+            else:
+                new_skill = UserSkill(user_id=uid, skill=obs.skill, score=round(ratio, 3))
+                db.session.add(new_skill)
+        
+        db.session.commit()
         return self.get_weak_skills(user_id)
 
     def get_weak_skills(self, user_id: str) -> WeakSkillsResponse:
-        data = self._store.get(user_id, {})
-        ordered = sorted(data.items(), key=lambda x: x[1], reverse=True)
+        uid = int(user_id)
+        skills = UserSkill.query.filter_by(user_id=uid).order_by(UserSkill.score.desc()).limit(5).all()
+        
         weak = [
             WeakSkillScore(
-                skill=skill,
-                weakness_score=score,
-                suggested_drill=_DRILLS.get(skill, "Targeted mixed drill with instant feedback"),
+                skill=s.skill,
+                weakness_score=s.score,
+                suggested_drill=_DRILLS.get(s.skill, "Targeted mixed drill with instant feedback"),
             )
-            for skill, score in ordered[:5]
+            for s in skills
         ]
         return WeakSkillsResponse(user_id=user_id, weak_skills=weak)
 

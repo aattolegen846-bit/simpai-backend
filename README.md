@@ -27,9 +27,15 @@ python3 -m pip install -r requirements.txt
 python3 app/main.py
 ```
 
-3. Base URL:
+3. Base URL (default):
 
-`http://127.0.0.1:5000`
+`http://127.0.0.1:5001`
+
+You can override the port with the `PORT` environment variable, for example:
+
+```bash
+PORT=8000 python3 app/main.py
+```
 
 ## API Endpoints
 
