@@ -10,11 +10,14 @@ from app.models.schemas import (
     PlacementAssessmentRequest,
     SentenceUsageRequest,
     SkillLevel,
+    SkillObservation,
     SpacedRepetitionRequest,
     SubscriptionCreateRequest,
+    NextLessonRequest,
     UnifiedLessonRequest,
     VocabReviewItem,
 )
+from app.services.adaptive_learning_service import AdaptiveLearningService
 from app.services.growth_service import GrowthService
 from app.services.revenue_service import RevenueService
 from app.services.sentence_usage_service import SentenceUsageService
@@ -27,6 +30,7 @@ learning_service = UnifiedLearningService()
 sentence_service = SentenceUsageService()
 synonym_service = SynonymService()
 growth_service = GrowthService()
+adaptive_service = AdaptiveLearningService()
 revenue_service = RevenueService()
 WEBHOOK_SECRET = "dev_stripe_webhook_secret"
 
@@ -256,4 +260,53 @@ def cohort_analytics():
     if not cohort:
         return _bad_request("Missing required query param: cohort (YYYY-MM)")
     response: CohortAnalyticsResponse = revenue_service.cohort_analytics(cohort)
+    return jsonify(_json_ready(asdict(response)))
+
+
+@router.post("/user/skills/update")
+def update_user_skills():
+    payload = request.get_json(force=True)
+    if "user_id" not in payload or "observations" not in payload:
+        return _bad_request("Missing required fields: user_id, observations")
+    if not isinstance(payload["observations"], list):
+        return _bad_request("observations must be an array")
+    try:
+        observations = [
+            SkillObservation(
+                skill=str(item["skill"]).strip().lower(),
+                mistakes=int(item["mistakes"]),
+                attempts=int(item["attempts"]),
+            )
+            for item in payload["observations"]
+        ]
+    except (KeyError, TypeError, ValueError) as error:
+        return _bad_request(f"Invalid observations payload: {error}")
+
+    response = adaptive_service.update_weak_skills(
+        user_id=str(payload["user_id"]),
+        observations=observations,
+    )
+    return jsonify(_json_ready(asdict(response)))
+
+
+@router.get("/user/<user_id>/weak-skills")
+def get_weak_skills(user_id: str):
+    response = adaptive_service.get_weak_skills(user_id=user_id)
+    return jsonify(_json_ready(asdict(response)))
+
+
+@router.post("/lesson/next")
+def get_next_best_lesson():
+    payload = request.get_json(force=True)
+    required_fields = ["user_id", "available_minutes", "current_level"]
+    for field in required_fields:
+        if field not in payload:
+            return _bad_request(f"Missing required field: {field}")
+    model = NextLessonRequest(
+        user_id=str(payload["user_id"]),
+        available_minutes=int(payload["available_minutes"]),
+        current_level=str(payload["current_level"]).strip().lower(),
+    )
+    weak_data = adaptive_service.get_weak_skills(model.user_id)
+    response = adaptive_service.recommend_next_lesson(model, weak_data)
     return jsonify(_json_ready(asdict(response)))

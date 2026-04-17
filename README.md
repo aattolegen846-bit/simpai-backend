@@ -69,6 +69,15 @@ python3 app/main.py
 - `GET /api/v1/analytics/cohort?cohort=YYYY-MM`
   - Returns activation and paid conversion metrics for a cohort period.
 
+- `POST /api/v1/user/skills/update`
+  - Updates learner weak-skill profile from exercise observations.
+
+- `GET /api/v1/user/{user_id}/weak-skills`
+  - Returns ranked weak skills and suggested targeted drills.
+
+- `POST /api/v1/lesson/next`
+  - Recommends the next best lesson plan based on weak skills and available time.
+
 ## Quick examples
 
 Unified lesson request:

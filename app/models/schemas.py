@@ -210,3 +210,52 @@ class CohortAnalyticsResponse:
     activation_rate: float
     paid_users: int
     paid_conversion_rate: float
+
+
+@dataclass(frozen=True)
+class SkillObservation:
+    skill: str
+    mistakes: int
+    attempts: int
+
+
+@dataclass(frozen=True)
+class WeakSkillsUpdateRequest:
+    user_id: str
+    observations: List[SkillObservation]
+
+
+@dataclass(frozen=True)
+class WeakSkillScore:
+    skill: str
+    weakness_score: float
+    suggested_drill: str
+
+
+@dataclass(frozen=True)
+class WeakSkillsResponse:
+    user_id: str
+    weak_skills: List[WeakSkillScore]
+
+
+@dataclass(frozen=True)
+class NextLessonRequest:
+    user_id: str
+    available_minutes: int
+    current_level: str
+
+
+@dataclass(frozen=True)
+class LessonBlock:
+    focus: str
+    minutes: int
+    activity: str
+
+
+@dataclass(frozen=True)
+class NextLessonResponse:
+    user_id: str
+    lesson_id: str
+    primary_focus: str
+    total_minutes: int
+    blocks: List[LessonBlock]

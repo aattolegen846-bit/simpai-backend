@@ -153,3 +153,53 @@ def test_cohort_analytics() -> None:
     data = response.get_json()
     assert data["cohort"] == cohort
     assert "paid_conversion_rate" in data
+
+
+def test_adaptive_weak_skills_update_and_get() -> None:
+    payload = {
+        "user_id": "learner-1",
+        "observations": [
+            {"skill": "past_tense", "mistakes": 7, "attempts": 10},
+            {"skill": "word_order", "mistakes": 4, "attempts": 8},
+        ],
+    }
+    updated = client.post("/api/v1/user/skills/update", json=payload)
+    assert updated.status_code == 200
+    updated_data = updated.get_json()
+    assert updated_data["user_id"] == "learner-1"
+    assert len(updated_data["weak_skills"]) >= 1
+
+    fetched = client.get("/api/v1/user/learner-1/weak-skills")
+    assert fetched.status_code == 200
+    fetched_data = fetched.get_json()
+    assert fetched_data["user_id"] == "learner-1"
+    assert fetched_data["weak_skills"][0]["skill"] in {"past_tense", "word_order"}
+
+
+def test_next_best_lesson() -> None:
+    # Seed weak skill profile first
+    client.post(
+        "/api/v1/user/skills/update",
+        json={
+            "user_id": "learner-2",
+            "observations": [
+                {"skill": "article_usage", "mistakes": 8, "attempts": 10},
+                {"skill": "listening_detail", "mistakes": 6, "attempts": 10},
+            ],
+        },
+    )
+
+    response = client.post(
+        "/api/v1/lesson/next",
+        json={
+            "user_id": "learner-2",
+            "available_minutes": 40,
+            "current_level": "a2",
+        },
+    )
+    assert response.status_code == 200
+    data = response.get_json()
+    assert data["user_id"] == "learner-2"
+    assert data["lesson_id"].startswith("nbl_")
+    assert data["total_minutes"] == 40
+    assert len(data["blocks"]) == 3
