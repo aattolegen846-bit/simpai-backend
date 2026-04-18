@@ -84,6 +84,10 @@ Run a quick load test:
 locust -f tests/perf_locust.py --host http://127.0.0.1:5001
 ```
 
+Production quick-start files:
+- `.env` template: `.env.production.example`
+- Deployment guide: `DEPLOY_RUNBOOK.md`
+
 ## API Endpoints
 
 - `POST /api/v1/auth/register` and `POST /api/v1/auth/login`
