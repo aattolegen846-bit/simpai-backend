@@ -45,6 +45,8 @@ from app.api.routes import router
 
 REQUEST_COUNT = Counter("simpai_http_requests_total", "Total HTTP requests", ["method", "path", "status"])
 REQUEST_LATENCY = Histogram("simpai_http_request_duration_seconds", "HTTP request latency", ["method", "path"])
+AI_ERRORS = Counter("simpai_ai_errors_total", "Total AI service errors", ["service"])
+CACHE_OPS = Counter("simpai_cache_operations_total", "Total Cache operations", ["operation", "status"])
 
 
 def _configure_logging() -> None:

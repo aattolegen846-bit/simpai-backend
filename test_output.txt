@@ -1,0 +1,171 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.9.6, pytest-8.4.2, pluggy-1.6.0 -- /Library/Developer/CommandLineTools/usr/bin/python3
+cachedir: .pytest_cache
+rootdir: /Users/tolegenayat/SimbaAI/simpai-backend
+collecting ... collected 4 items
+
+tests/test_engagement.py::test_quest_initialization PASSED               [ 25%]
+tests/test_engagement.py::test_social_following PASSED                   [ 50%]
+tests/test_engagement.py::test_challenge_progression FAILED              [ 75%]
+tests/test_engagement.py::test_quest_progress_via_xp FAILED              [100%]
+
+=================================== FAILURES ===================================
+__________________________ test_challenge_progression __________________________
+
+app = <Flask 'app.main'>
+
+    def test_challenge_progression(app):
+        with app.app_context():
+            u1 = User(username="u1", email="u1@ex.com", password_hash="h")
+            u2 = User(username="u2", email="u2@ex.com", password_hash="h")
+            db.session.add_all([u1, u2])
+            db.session.commit()
+    
+            # Create challenge
+            SocialService.create_friend_challenge(u1.id, "u2", goal_xp=100)
+    
+            # Update XP
+            # This should trigger challenge XP update via GamificationService
+>           GamificationService.update_xp(u1.id, 50)
+
+tests/test_engagement.py:70: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+user_id = 1, xp_gained = 50
+
+    @staticmethod
+    def update_xp(user_id: int, xp_gained: int) -> dict:
+        """
+        Updates a user's XP, checks daily goals, and marks progress in current league.
+        """
+        progress = UserProgress.query.filter_by(user_id=user_id).first()
+        if not progress:
+            progress = UserProgress(user_id=user_id, xp_total=0, daily_xp_current=0)
+            db.session.add(progress)
+    
+        if progress.xp_total is None: progress.xp_total = 0
+        if progress.daily_xp_current is None: progress.daily_xp_current = 0
+    
+        progress.xp_total += xp_gained
+        progress.daily_xp_current += xp_gained
+    
+        # NEW: Update Quests
+        EngagementService.update_quest_progress(user_id, "xp_goal", xp_gained)
+    
+        # Sync with User points for legacy compatibility
+        user = db.session.get(User, user_id)
+        if user:
+            user.points += xp_gained
+    
+        # Check Daily Goal
+        goal_reached = False
+        if progress.daily_xp_current >= progress.daily_xp_target:
+            # We could trigger a special badge here if it's the first time today
+            goal_reached = True
+    
+        # Update League XP for current week
+        today = datetime.date.today()
+        # Find start of week (Monday)
+        week_start = today - datetime.timedelta(days=today.weekday())
+    
+        league_assign = LeagueAssignment.query.filter_by(
+            user_id=user_id, week_start=week_start
+        ).first()
+    
+        if not league_assign:
+            league_assign = LeagueAssignment(
+                user_id=user_id,
+                league_name=progress.current_league,
+                week_start=week_start
+            )
+            db.session.add(league_assign)
+    
+>       league_assign.xp_earned += xp_gained
+E       TypeError: unsupported operand type(s) for +=: 'NoneType' and 'int'
+
+app/services/gamification_service.py:58: TypeError
+__________________________ test_quest_progress_via_xp __________________________
+
+app = <Flask 'app.main'>
+
+    def test_quest_progress_via_xp(app):
+        with app.app_context():
+            user = User(username="q_user", email="q@ex.com", password_hash="h")
+            db.session.add(user)
+            db.session.commit()
+    
+            EngagementService.initialize_daily_quests(user.id)
+    
+            # Earn XP
+>           GamificationService.update_xp(user.id, 120)
+
+tests/test_engagement.py:89: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+user_id = 1, xp_gained = 120
+
+    @staticmethod
+    def update_xp(user_id: int, xp_gained: int) -> dict:
+        """
+        Updates a user's XP, checks daily goals, and marks progress in current league.
+        """
+        progress = UserProgress.query.filter_by(user_id=user_id).first()
+        if not progress:
+            progress = UserProgress(user_id=user_id, xp_total=0, daily_xp_current=0)
+            db.session.add(progress)
+    
+        if progress.xp_total is None: progress.xp_total = 0
+        if progress.daily_xp_current is None: progress.daily_xp_current = 0
+    
+        progress.xp_total += xp_gained
+        progress.daily_xp_current += xp_gained
+    
+        # NEW: Update Quests
+        EngagementService.update_quest_progress(user_id, "xp_goal", xp_gained)
+    
+        # Sync with User points for legacy compatibility
+        user = db.session.get(User, user_id)
+        if user:
+            user.points += xp_gained
+    
+        # Check Daily Goal
+        goal_reached = False
+        if progress.daily_xp_current >= progress.daily_xp_target:
+            # We could trigger a special badge here if it's the first time today
+            goal_reached = True
+    
+        # Update League XP for current week
+        today = datetime.date.today()
+        # Find start of week (Monday)
+        week_start = today - datetime.timedelta(days=today.weekday())
+    
+        league_assign = LeagueAssignment.query.filter_by(
+            user_id=user_id, week_start=week_start
+        ).first()
+    
+        if not league_assign:
+            league_assign = LeagueAssignment(
+                user_id=user_id,
+                league_name=progress.current_league,
+                week_start=week_start
+            )
+            db.session.add(league_assign)
+    
+>       league_assign.xp_earned += xp_gained
+E       TypeError: unsupported operand type(s) for +=: 'NoneType' and 'int'
+
+app/services/gamification_service.py:58: TypeError
+=============================== warnings summary ===============================
+../../Library/Python/3.9/lib/python/site-packages/pythonjsonlogger/jsonlogger.py:11
+  /Users/tolegenayat/Library/Python/3.9/lib/python/site-packages/pythonjsonlogger/jsonlogger.py:11: DeprecationWarning: pythonjsonlogger.jsonlogger has been moved to pythonjsonlogger.json
+    warnings.warn(
+
+../../Library/Python/3.9/lib/python/site-packages/urllib3/__init__.py:35
+  /Users/tolegenayat/Library/Python/3.9/lib/python/site-packages/urllib3/__init__.py:35: NotOpenSSLWarning: urllib3 v2 only supports OpenSSL 1.1.1+, currently the 'ssl' module is compiled with 'LibreSSL 2.8.3'. See: https://github.com/urllib3/urllib3/issues/3020
+    warnings.warn(
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ============================
+FAILED tests/test_engagement.py::test_challenge_progression - TypeError: unsu...
+FAILED tests/test_engagement.py::test_quest_progress_via_xp - TypeError: unsu...
+=================== 2 failed, 2 passed, 2 warnings in 0.65s ====================

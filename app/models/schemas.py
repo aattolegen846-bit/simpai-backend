@@ -327,7 +327,7 @@ class ProgressSnapshot:
     user_id: str
     xp_total: int
     streak_days: int
-    last_activity_date: str | None
+    last_activity_date: Optional[str]
 
 
 @dataclass(frozen=True)

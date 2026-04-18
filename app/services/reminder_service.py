@@ -1,5 +1,7 @@
 from datetime import datetime, timedelta, timezone
 
+from typing import List, Optional
+
 from app.database import db
 from app.models.db_models import InAppReminder
 from app.models.schemas import ReminderDto
@@ -20,7 +22,7 @@ class ReminderService:
         db.session.commit()
         return self._to_dto(reminder)
 
-    def get_user_reminders(self, user_id: str, status: str | None = None) -> list[ReminderDto]:
+    def get_user_reminders(self, user_id: str, status: Optional[str] = None) -> List[ReminderDto]:
         query = InAppReminder.query.filter_by(user_id=int(user_id))
         if status:
             query = query.filter_by(status=status)

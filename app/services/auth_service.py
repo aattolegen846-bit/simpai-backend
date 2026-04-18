@@ -10,13 +10,17 @@ from app.models.db_models import RefreshToken
 from app.models.user import User
 from app.database import db
 
+import logging
+
 # Secret key should be at least 32 bytes for HS256 to avoid warnings and potential issues
 DEFAULT_SECRET = "senior-secret-key-that-is-at-least-32-bytes-long-for-security"
 SECRET_KEY = os.getenv("SECRET_KEY", DEFAULT_SECRET)
-ACCESS_TOKEN_HOURS = int(os.getenv("JWT_EXP_HOURS", "24"))
+ACCESS_TOKEN_MINUTES = int(os.getenv("JWT_EXP_MINUTES", "15"))
 REFRESH_TOKEN_DAYS = int(os.getenv("JWT_REFRESH_DAYS", "30"))
 MAX_FAILED_LOGIN_ATTEMPTS = int(os.getenv("MAX_FAILED_LOGIN_ATTEMPTS", "5"))
 LOGIN_LOCK_MINUTES = int(os.getenv("LOGIN_LOCK_MINUTES", "15"))
+
+logger = logging.getLogger(__name__)
 
 
 class AuthService:
@@ -39,24 +43,34 @@ class AuthService:
         if not user:
             return None
         now = datetime.datetime.now(datetime.timezone.utc)
-        if user.locked_until and user.locked_until > now:
-            return None
+        locked_until = user.locked_until
+        if locked_until:
+            if locked_until.tzinfo is None:
+                locked_until = locked_until.replace(tzinfo=datetime.timezone.utc)
+            if locked_until > now:
+                return None
         if pbkdf2_sha256.verify(password, user.password_hash):
             user.failed_login_count = 0
             user.locked_until = None
+            user.last_login_at = now
             db.session.commit()
+            logger.info("user_login_success", extra={"user_id": user.id, "identifier": identifier})
             return user
+        
         user.failed_login_count += 1
+        logger.warning("user_login_failed", extra={"user_id": user.id, "identifier": identifier, "attempt": user.failed_login_count})
+        
         if user.failed_login_count >= MAX_FAILED_LOGIN_ATTEMPTS:
             user.locked_until = now + datetime.timedelta(minutes=LOGIN_LOCK_MINUTES)
             user.failed_login_count = 0
+            logger.error("user_account_locked", extra={"user_id": user.id, "identifier": identifier, "until": user.locked_until.isoformat()})
         db.session.commit()
         return None
 
     @staticmethod
     def generate_token(user_id: int) -> str:
         payload = {
-            "exp": datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=ACCESS_TOKEN_HOURS),
+            "exp": datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(minutes=ACCESS_TOKEN_MINUTES),
             "iat": datetime.datetime.now(datetime.timezone.utc),
             "sub": str(user_id),
             "type": "access",
@@ -80,17 +94,30 @@ class AuthService:
     @staticmethod
     def rotate_refresh_token(raw_refresh_token: str) -> Optional[tuple[str, str]]:
         token_hash = hashlib.sha256(raw_refresh_token.encode("utf-8")).hexdigest()
-        record = RefreshToken.query.filter_by(token_hash=token_hash, revoked=False).first()
+        record = RefreshToken.query.filter_by(token_hash=token_hash).first()
+        
         if not record:
             return None
+            
+        if record.revoked:
+            # REUSE DETECTION: If a revoked token is used, someone might have stolen it.
+            # Revoke ALL active tokens for this user for security.
+            logger.critical("refresh_token_reuse_detected", extra={"user_id": record.user_id, "token_id": record.id})
+            RefreshToken.query.filter_by(user_id=record.user_id, revoked=False).update({"revoked": True})
+            db.session.commit()
+            return None
+
         expiry = record.expires_at
         if expiry.tzinfo is None:
             expiry = expiry.replace(tzinfo=datetime.timezone.utc)
         if expiry < datetime.datetime.now(datetime.timezone.utc):
+            logger.info("refresh_token_expired", extra={"user_id": record.user_id})
             return None
+
         user = db.session.get(User, record.user_id)
-        if not user:
+        if not user or (hasattr(user, 'is_active') and not user.is_active):
             return None
+
         record.revoked = True
         access = AuthService.generate_token(user.id)
         new_refresh = AuthService.generate_refresh_token(user.id)

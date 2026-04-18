@@ -40,6 +40,11 @@ from app.models.db_models import LessonSession, UserEvent
 from app.models.user import User
 from app.services.ai_tutor_service import AITutorService
 from app.services.social_service import SocialService
+from app.services.gamification_service import GamificationService
+from app.services.content_service import ContentService
+from app.services.review_service import ReviewService
+from app.services.analytics_service import AnalyticsService
+from app.services.engagement_service import EngagementService
 from app.database import db
 from uuid import uuid4
 from app.extensions import cache, limiter
@@ -49,43 +54,14 @@ router = Blueprint("learning-platform", __name__, url_prefix="/api/v1")
 auth_service = AuthService()
 ai_tutor_service = AITutorService()
 social_service = SocialService()
+gamification_service = GamificationService()
+content_service = ContentService()
+review_service = ReviewService()
+analytics_service = AnalyticsService()
+engagement_service = EngagementService()
 personalization_service = PersonalizationService()
 
-def token_required(f):
-    @wraps(f)
-    def decorated(*args, **kwargs):
-        token = request.headers.get("Authorization")
-        if not token:
-            return jsonify({"error": "Token is missing"}), 401
-        
-        # Expecting 'Bearer <token>'
-        if token.startswith("Bearer "):
-            token = token.split(" ")[1]
-            
-        user_id = auth_service.decode_token(token)
-        if not user_id:
-            return jsonify({"error": "Token is invalid"}), 401
-            
-        current_user = db.session.get(User, user_id)
-        if not current_user:
-            return jsonify({"error": "User not found"}), 401
-            
-        return f(current_user, *args, **kwargs)
-    return decorated
-
-
-def role_required(*roles):
-    def wrapper(fn):
-        @wraps(fn)
-        @token_required
-        def decorated(current_user, *args, **kwargs):
-            if current_user.role not in roles:
-                return jsonify({"error": "Forbidden"}), 403
-            return fn(current_user, *args, **kwargs)
-
-        return decorated
-
-    return wrapper
+from app.middleware.auth import token_required, role_required
 
 
 @router.post("/auth/register")
@@ -669,6 +645,10 @@ def submit_quiz(current_user):
     )
 
     xp_gain = (attempt.score * 10) + (5 if attempt.score == attempt.total_questions else 0)
+    
+    # NEW: Unified Pro Gamification
+    gamification_payload = gamification_service.update_xp(current_user.id, xp_gain)
+    
     progress = progress_service.award_xp_and_update_streak(str(current_user.id), xp_gain)
     reminder = reminder_service.schedule_followup_reminder(
         user_id=str(current_user.id),
@@ -778,3 +758,132 @@ def acknowledge_reminder(current_user, reminder_id: int):
     cache.delete(f"user_reminders:{current_user.id}:all")
     cache.delete(f"user_reminders:{current_user.id}:pending")
     return jsonify(_json_ready(asdict(response)))
+
+
+# --- UNIFIED PRO BACKEND ROUTES (Duolingo, EdVibe, Alem) ---
+
+@router.get("/courses")
+@token_required
+def get_courses(current_user):
+    lang = request.args.get("language")
+    return jsonify(content_service.get_courses(lang))
+
+
+@router.get("/courses/<int:course_id>")
+@token_required
+def get_course_details(current_user, course_id: int):
+    return jsonify(content_service.get_course_details(course_id))
+
+
+@router.get("/lessons/<int:lesson_id>/tasks")
+@token_required
+def get_lesson_tasks(current_user, lesson_id: int):
+    return jsonify(content_service.get_lesson_tasks(lesson_id))
+
+
+@router.get("/gamification/leaderboard")
+@token_required
+def get_league_leaderboard(current_user):
+    return jsonify(gamification_service.get_league_leaderboard(current_user.id))
+
+
+@router.get("/gamification/achievements")
+@token_required
+def get_achievements(current_user):
+    return jsonify(gamification_service.get_achievements(current_user.id))
+
+
+@router.get("/review/mistakes")
+@token_required
+def get_mistake_review(current_user):
+    limit = request.args.get("limit", 10, type=int)
+    return jsonify(review_service.get_mistake_review_session(current_user.id, limit))
+
+
+@router.get("/progress/vocabulary")
+@token_required
+def get_vocab_stats(current_user):
+    return jsonify(review_service.get_vocabulary_stats(current_user.id))
+
+
+@router.post("/admin/seed-demo")
+@role_required("admin")
+def seed_demo_content(current_user):
+    content_service.seed_demo_content()
+    analytics_service.seed_simulated_activity()
+    engagement_service.initialize_daily_quests(current_user.id)
+    return jsonify({"message": "Pro Demo content, analytics, and quests seeded successfully."})
+
+
+# --- GROWTH & ENGAGEMENT ROUTES (Social, Quests, Nudges) ---
+
+@router.post("/social/follow")
+@token_required
+def follow_user(current_user):
+    payload = request.get_json(force=True)
+    target = payload.get("username")
+    if not target:
+        return _bad_request("Missing target username")
+    success = social_service.follow_user(current_user.id, target)
+    return jsonify({"success": success})
+
+
+@router.get("/social/feed")
+@token_required
+def get_social_feed(current_user):
+    limit = request.args.get("limit", 20, type=int)
+    return jsonify(social_service.get_following_activity(current_user.id, limit))
+
+
+@router.post("/social/challenge")
+@token_required
+def create_challenge(current_user):
+    payload = request.get_json(force=True)
+    opponent = payload.get("opponent")
+    goal_xp = payload.get("goal_xp", 500)
+    if not opponent:
+        return _bad_request("Missing opponent username")
+    result = social_service.create_friend_challenge(current_user.id, opponent, goal_xp)
+    if not result:
+        return _bad_request("Could not create challenge")
+    return jsonify(result)
+
+
+@router.get("/social/challenges")
+@token_required
+def get_challenges(current_user):
+    return jsonify(social_service.get_active_challenges(current_user.id))
+
+
+@router.get("/user/quests")
+@token_required
+def get_user_quests(current_user):
+    engagement_service.initialize_daily_quests(current_user.id)
+    return jsonify(engagement_service.get_active_quests(current_user.id))
+
+
+@router.get("/analytics/dashboard")
+@token_required
+@role_required("admin")
+def get_analytics_dashboard(current_user):
+    return jsonify(analytics_service.get_dashboard_metrics())
+
+
+@router.get("/health/technical")
+@role_required("admin")
+def get_technical_health(current_user):
+    # Simulated technical health metrics for the demo
+    return jsonify({
+        "status": "healthy",
+        "services": {
+            "postgres": "up (5ms latency)",
+            "redis": "up (2ms latency)",
+            "worker_queue": "active (0 backlog)",
+            "gemini_api": "active (circuit_breaker: closed)"
+        },
+        "performance": {
+            "p95_latency_ms": 124,
+            "cache_hit_rate": "88%",
+            "active_connections": 12
+        }
+    })
