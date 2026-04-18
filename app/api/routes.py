@@ -32,6 +32,7 @@ from app.services.quiz_service import QuizService
 from app.services.reminder_service import ReminderService
 from app.services.revenue_service import RevenueService
 from app.services.job_service import JobService
+from app.services.personalization_service import PersonalizationService
 from app.services.sentence_usage_service import SentenceUsageService
 from app.services.synonym_service import SynonymService
 from app.services.unified_learning_service import UnifiedLearningService
@@ -48,6 +49,7 @@ router = Blueprint("learning-platform", __name__, url_prefix="/api/v1")
 auth_service = AuthService()
 ai_tutor_service = AITutorService()
 social_service = SocialService()
+personalization_service = PersonalizationService()
 
 def token_required(f):
     @wraps(f)
@@ -70,6 +72,20 @@ def token_required(f):
             
         return f(current_user, *args, **kwargs)
     return decorated
+
+
+def role_required(*roles):
+    def wrapper(fn):
+        @wraps(fn)
+        @token_required
+        def decorated(current_user, *args, **kwargs):
+            if current_user.role not in roles:
+                return jsonify({"error": "Forbidden"}), 403
+            return fn(current_user, *args, **kwargs)
+
+        return decorated
+
+    return wrapper
 
 
 @router.post("/auth/register")
@@ -102,10 +118,43 @@ def login():
         return jsonify({"error": "Invalid credentials"}), 401
         
     token = auth_service.generate_token(user.id)
+    refresh_token = auth_service.generate_refresh_token(user.id)
     return jsonify({
         "token": token,
+        "refresh_token": refresh_token,
         "user": user.to_dict()
     })
+
+
+@router.post("/auth/refresh")
+@limiter.limit("40 per minute")
+def refresh_token():
+    payload = request.get_json(force=True)
+    raw_refresh = payload.get("refresh_token")
+    if not raw_refresh:
+        return _bad_request("Missing refresh_token")
+    rotated = auth_service.rotate_refresh_token(raw_refresh)
+    if not rotated:
+        return jsonify({"error": "Invalid refresh token"}), 401
+    access_token, new_refresh_token = rotated
+    return jsonify({"token": access_token, "refresh_token": new_refresh_token})
+
+
+@router.post("/auth/revoke")
+@limiter.limit("40 per minute")
+def revoke_token():
+    payload = request.get_json(force=True)
+    raw_refresh = payload.get("refresh_token")
+    if not raw_refresh:
+        return _bad_request("Missing refresh_token")
+    revoked = auth_service.revoke_refresh_token(raw_refresh)
+    return jsonify({"revoked": revoked})
+
+
+@router.get("/auth/me")
+@token_required
+def auth_me(current_user):
+    return jsonify(current_user.to_dict())
 
 
 @router.get("/social/leaderboard")
@@ -613,6 +662,11 @@ def submit_quiz(current_user):
         ),
         weak_data,
     )
+    personalization_service.record_weak_skills(
+        str(current_user.id),
+        [asdict(item) for item in weak_data.weak_skills],
+        source="quiz_submit",
+    )
 
     xp_gain = (attempt.score * 10) + (5 if attempt.score == attempt.total_questions else 0)
     progress = progress_service.award_xp_and_update_streak(str(current_user.id), xp_gain)
@@ -665,6 +719,37 @@ def submit_quiz(current_user):
 def get_progress(current_user):
     response = progress_service.get_progress(str(current_user.id))
     return jsonify(_json_ready(asdict(response)))
+
+
+@router.get("/personalization/weak-skill-trends")
+@token_required
+def weak_skill_trends(current_user):
+    limit = request.args.get("limit", 50, type=int)
+    return jsonify(personalization_service.get_weak_skill_trends(str(current_user.id), limit=limit))
+
+
+@router.get("/personalization/next-best-action")
+@token_required
+def next_best_action(current_user):
+    available_minutes = request.args.get("available_minutes", 30, type=int)
+    current_level = request.args.get("current_level", current_user.cefr_level)
+    payload = personalization_service.next_best_action(
+        str(current_user.id), available_minutes=available_minutes, current_level=current_level
+    )
+    return jsonify(payload)
+
+
+@router.get("/admin/health/overview")
+@role_required("admin")
+def admin_health_overview(current_user):
+    return jsonify(
+        {
+            "status": "ok",
+            "cache_enabled": True,
+            "rate_limit_default": "enabled",
+            "note": "Admin-only lightweight operational overview.",
+        }
+    )
 
 
 @router.get("/reminders")

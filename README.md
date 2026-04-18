@@ -87,11 +87,16 @@ locust -f tests/perf_locust.py --host http://127.0.0.1:5001
 Production quick-start files:
 - `.env` template: `.env.production.example`
 - Deployment guide: `DEPLOY_RUNBOOK.md`
+- Local infra stack: `docker-compose.yml`
 
 ## API Endpoints
 
 - `POST /api/v1/auth/register` and `POST /api/v1/auth/login`
   - Registers user and returns JWT token for protected routes.
+- `POST /api/v1/auth/refresh` and `POST /api/v1/auth/revoke`
+  - Rotates or revokes refresh token.
+- `GET /api/v1/auth/me` (auth required)
+  - Returns current authenticated user profile.
 
 - `GET /api/v1/social/leaderboard`
   - Returns top users ranked by points.
@@ -152,6 +157,10 @@ Production quick-start files:
 
 - `GET /api/v1/progress` (auth required)
   - Returns user XP, streak days, and last activity date.
+- `GET /api/v1/personalization/weak-skill-trends` (auth required)
+  - Returns weak skill history timeline.
+- `GET /api/v1/personalization/next-best-action` (auth required)
+  - Returns recommended next learning action from recent weak-skill trend.
 
 - `GET /api/v1/reminders` and `POST /api/v1/reminders/{id}/ack` (auth required)
   - Fetches in-app reminders and marks reminder as acknowledged.

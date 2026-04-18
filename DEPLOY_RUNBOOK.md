@@ -45,6 +45,13 @@ set -a && source .env.production && set +a
 gunicorn -c gunicorn.conf.py app.main:application
 ```
 
+Optional worker for Redis-backed async jobs:
+
+```bash
+set -a && source .env.production && set +a
+rq worker simpai_jobs
+```
+
 ## 6) Verify service health
 
 ```bash

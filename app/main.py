@@ -1,9 +1,18 @@
 import time
 import uuid
 import os
+import logging
 from dotenv import load_dotenv
 from flask import Flask, g, jsonify, request
 from sqlalchemy import text
+try:
+    from pythonjsonlogger import jsonlogger
+except Exception:  # pragma: no cover
+    jsonlogger = None
+try:
+    import sentry_sdk
+except Exception:  # pragma: no cover
+    sentry_sdk = None
 try:
     from prometheus_client import CONTENT_TYPE_LATEST, Counter, Histogram, generate_latest
 except Exception:  # pragma: no cover
@@ -38,7 +47,20 @@ REQUEST_COUNT = Counter("simpai_http_requests_total", "Total HTTP requests", ["m
 REQUEST_LATENCY = Histogram("simpai_http_request_duration_seconds", "HTTP request latency", ["method", "path"])
 
 
+def _configure_logging() -> None:
+    handler = logging.StreamHandler()
+    if jsonlogger:
+        formatter = jsonlogger.JsonFormatter("%(asctime)s %(levelname)s %(message)s")
+    else:
+        formatter = logging.Formatter("%(asctime)s %(levelname)s %(message)s")
+    handler.setFormatter(formatter)
+    root = logging.getLogger()
+    root.handlers = [handler]
+    root.setLevel(logging.INFO)
+
+
 def create_app() -> Flask:
+    _configure_logging()
     webapp = Flask(__name__)
     webapp.config.from_object(Config)
     if str(webapp.config.get("SQLALCHEMY_DATABASE_URI", "")).startswith("sqlite"):
@@ -48,6 +70,8 @@ def create_app() -> Flask:
     cache.init_app(webapp)
     limiter.init_app(webapp)
     migrate.init_app(webapp, db)
+    if sentry_sdk and os.getenv("SENTRY_DSN"):
+        sentry_sdk.init(dsn=os.getenv("SENTRY_DSN"), traces_sample_rate=0.05)
 
     with webapp.app_context():
         import app.models.user  # noqa: F401
@@ -68,6 +92,16 @@ def create_app() -> Flask:
         path = request.endpoint or request.path
         REQUEST_COUNT.labels(request.method, path, response.status_code).inc()
         REQUEST_LATENCY.labels(request.method, path).observe(duration_seconds)
+        logging.info(
+            "request_completed",
+            extra={
+                "path": request.path,
+                "method": request.method,
+                "status_code": response.status_code,
+                "response_time_ms": round(duration_ms, 2),
+                "request_id": g.get("request_id", "n/a"),
+            },
+        )
         response.headers["X-Request-Id"] = g.get("request_id", "n/a")
         response.headers["X-Response-Time-Ms"] = f"{duration_ms:.2f}"
         return response

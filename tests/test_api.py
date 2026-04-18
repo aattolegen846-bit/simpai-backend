@@ -5,7 +5,7 @@ from app.main import application
 client = application.test_client()
 
 
-def _register_and_login() -> tuple[str, str]:
+def _register_and_login() -> tuple[str, str, str]:
     suffix = uuid.uuid4().hex[:8]
     username = f"user_{suffix}"
     email = f"{suffix}@test.dev"
@@ -22,7 +22,7 @@ def _register_and_login() -> tuple[str, str]:
     )
     assert login.status_code == 200
     payload = login.get_json()
-    return payload["token"], str(payload["user"]["id"])
+    return payload["token"], str(payload["user"]["id"]), payload["refresh_token"]
 
 
 def test_healthcheck() -> None:
@@ -58,7 +58,7 @@ def test_content_endpoints() -> None:
 
 
 def test_learning_automation_flow() -> None:
-    token, user_id = _register_and_login()
+    token, user_id, refresh_token = _register_and_login()
     auth = {"Authorization": f"Bearer {token}"}
 
     level = client.post(
@@ -124,9 +124,19 @@ def test_learning_automation_flow() -> None:
     assert ack.status_code == 200
     assert ack.get_json()["status"] == "acknowledged"
 
+    refreshed = client.post("/api/v1/auth/refresh", json={"refresh_token": refresh_token})
+    assert refreshed.status_code == 200
+    refreshed_payload = refreshed.get_json()
+    assert "token" in refreshed_payload
+    assert "refresh_token" in refreshed_payload
+
+    trends = client.get("/api/v1/personalization/weak-skill-trends", headers=auth)
+    assert trends.status_code == 200
+    assert isinstance(trends.get_json(), list)
+
 
 def test_same_day_streak_idempotent() -> None:
-    token, _ = _register_and_login()
+    token, _, _ = _register_and_login()
     auth = {"Authorization": f"Bearer {token}"}
 
     started = client.post(

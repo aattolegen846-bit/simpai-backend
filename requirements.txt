@@ -6,6 +6,7 @@ flask-limiter
 sqlalchemy
 psycopg
 redis
+rq
 gunicorn
 prometheus-client
 pybreaker
@@ -16,3 +17,5 @@ google-generativeai
 requests
 pytest
 locust
+python-json-logger
+sentry-sdk
