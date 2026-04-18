@@ -3,6 +3,18 @@ import requests
 import json
 from typing import List, Optional
 from dataclasses import dataclass
+try:
+    import pybreaker
+except Exception:  # pragma: no cover
+    class _NoopCircuitBreaker:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def call(self, fn, *args, **kwargs):
+            return fn(*args, **kwargs)
+
+    class pybreaker:  # type: ignore
+        CircuitBreaker = _NoopCircuitBreaker
 
 @dataclass
 class AIExplanation:
@@ -14,8 +26,14 @@ class AIExplanation:
 class AITutorService:
     def __init__(self):
         self.api_key = os.getenv("GEMINI_API_KEY")
+        self.timeout_seconds = int(os.getenv("AI_TIMEOUT_SECONDS", "8"))
         # Base Gemini API endpoint
         self.api_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={self.api_key}"
+        self.session = requests.Session()
+        self.breaker = pybreaker.CircuitBreaker(
+            fail_max=int(os.getenv("AI_CIRCUIT_FAIL_MAX", "5")),
+            reset_timeout=int(os.getenv("AI_CIRCUIT_RESET_SECONDS", "30")),
+        )
 
     def explain_sentence(self, sentence: str, target_lang: str, native_lang: str) -> AIExplanation:
         if not self.api_key or "Ab8RN" in self.api_key: # Checking if it's the provided placeholder or empty
@@ -44,7 +62,9 @@ class AITutorService:
         }
 
         try:
-            response = requests.post(self.api_url, json=payload, timeout=15)
+            response = self.breaker.call(
+                self.session.post, self.api_url, json=payload, timeout=self.timeout_seconds
+            )
             response.raise_for_status()
             data = response.json()
             
@@ -90,7 +110,9 @@ class AITutorService:
 
         payload = {"contents": [{"parts": [{"text": prompt}]}]}
         try:
-            response = requests.post(self.api_url, json=payload, timeout=15)
+            response = self.breaker.call(
+                self.session.post, self.api_url, json=payload, timeout=self.timeout_seconds
+            )
             response.raise_for_status()
             text_content = response.json()['candidates'][0]['content']['parts'][0]['text']
             

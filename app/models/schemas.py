@@ -259,3 +259,95 @@ class NextLessonResponse:
     primary_focus: str
     total_minutes: int
     blocks: List[LessonBlock]
+
+
+@dataclass(frozen=True)
+class LevelTestSubmitRequest:
+    user_id: str
+    correct_answers: int
+    total_questions: int
+    average_response_seconds: float
+    target_language: str = "en"
+
+
+@dataclass(frozen=True)
+class LevelTestSubmitResponse:
+    user_id: str
+    attempt_id: int
+    cefr_level: str
+    score_percent: float
+    weak_skills: List[str]
+    first_lesson_focus: str
+
+
+@dataclass(frozen=True)
+class LessonStartRequest:
+    user_id: str
+    current_level: str
+    available_minutes: int
+
+
+@dataclass(frozen=True)
+class LessonStartResponse:
+    user_id: str
+    lesson_id: str
+    primary_focus: str
+    total_minutes: int
+    blocks: List[LessonBlock]
+    status: str
+
+
+@dataclass(frozen=True)
+class QuizQuestionResult:
+    skill: str
+    is_correct: bool
+    user_answer: str
+    expected_answer: str
+    error_type: str
+
+
+@dataclass(frozen=True)
+class QuizSubmitRequest:
+    user_id: str
+    lesson_id: str
+    current_level: str
+    available_minutes: int
+    results: List[QuizQuestionResult]
+
+
+@dataclass(frozen=True)
+class MistakeRecord:
+    skill: str
+    mistakes: int
+    attempts: int
+
+
+@dataclass(frozen=True)
+class ProgressSnapshot:
+    user_id: str
+    xp_total: int
+    streak_days: int
+    last_activity_date: str | None
+
+
+@dataclass(frozen=True)
+class ReminderDto:
+    id: int
+    reminder_type: str
+    due_at: str
+    status: str
+    payload: Dict[str, object]
+
+
+@dataclass(frozen=True)
+class QuizSubmitResponse:
+    user_id: str
+    lesson_id: str
+    quiz_attempt_id: int
+    score: int
+    total_questions: int
+    mistakes: List[MistakeRecord]
+    weak_skills: List[WeakSkillScore]
+    next_lesson: NextLessonResponse
+    progress: ProgressSnapshot
+    reminder: ReminderDto

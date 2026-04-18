@@ -15,19 +15,33 @@ from app.models.schemas import (
     SpacedRepetitionRequest,
     SubscriptionCreateRequest,
     NextLessonRequest,
+    LessonStartRequest,
+    LessonStartResponse,
+    LevelTestSubmitRequest,
     UnifiedLessonRequest,
+    QuizQuestionResult,
+    QuizSubmitRequest,
     VocabReviewItem,
 )
 from app.services.auth_service import AuthService
 from app.services.adaptive_learning_service import AdaptiveLearningService
+from app.services.assessment_service import AssessmentService
 from app.services.growth_service import GrowthService
+from app.services.progress_service import ProgressService
+from app.services.quiz_service import QuizService
+from app.services.reminder_service import ReminderService
 from app.services.revenue_service import RevenueService
+from app.services.job_service import JobService
 from app.services.sentence_usage_service import SentenceUsageService
 from app.services.synonym_service import SynonymService
 from app.services.unified_learning_service import UnifiedLearningService
+from app.models.db_models import LessonSession, UserEvent
 from app.models.user import User
 from app.services.ai_tutor_service import AITutorService
 from app.services.social_service import SocialService
+from app.database import db
+from uuid import uuid4
+from app.extensions import cache, limiter
 
 router = Blueprint("learning-platform", __name__, url_prefix="/api/v1")
 
@@ -50,7 +64,7 @@ def token_required(f):
         if not user_id:
             return jsonify({"error": "Token is invalid"}), 401
             
-        current_user = User.query.get(user_id)
+        current_user = db.session.get(User, user_id)
         if not current_user:
             return jsonify({"error": "User not found"}), 401
             
@@ -59,6 +73,7 @@ def token_required(f):
 
 
 @router.post("/auth/register")
+@limiter.limit("20 per minute")
 def register():
     payload = request.get_json(force=True)
     username = payload.get("username")
@@ -76,6 +91,7 @@ def register():
 
 
 @router.post("/auth/login")
+@limiter.limit("30 per minute")
 def login():
     payload = request.get_json(force=True)
     identifier = payload.get("identifier")  # username or email
@@ -93,6 +109,7 @@ def login():
 
 
 @router.get("/social/leaderboard")
+@cache.cached(timeout=30, query_string=True)
 def get_leaderboard():
     limit = request.args.get("limit", 10, type=int)
     leaderboard = social_service.get_leaderboard(limit)
@@ -101,35 +118,54 @@ def get_leaderboard():
 
 @router.post("/ai/explain")
 @token_required
+@limiter.limit("30 per minute")
 def ai_explain(current_user):
     payload = request.get_json(force=True)
     sentence = payload.get("sentence")
     target_lang = payload.get("target_language", "en")
     native_lang = payload.get("native_language", "kk")
+    async_mode = bool(payload.get("async", False))
     
     if not sentence:
         return _bad_request("Missing sentence")
         
+    if async_mode:
+        job_id = job_service.enqueue(ai_tutor_service.explain_sentence, sentence, target_lang, native_lang)
+        return jsonify({"job_id": job_id, "status": "queued"}), 202
+
     explanation = ai_tutor_service.explain_sentence(sentence, target_lang, native_lang)
     return jsonify(asdict(explanation))
 
 
 @router.post("/ai/feedback")
 @token_required
+@limiter.limit("30 per minute")
 def ai_feedback(current_user):
     payload = request.get_json(force=True)
     user_input = payload.get("user_input")
     target_text = payload.get("target_text")
+    async_mode = bool(payload.get("async", False))
     
     if not user_input or not target_text:
         return _bad_request("Missing fields")
         
+    if async_mode:
+        job_id = job_service.enqueue(ai_tutor_service.provide_feedback, user_input, target_text)
+        return jsonify({"job_id": job_id, "status": "queued"}), 202
+
     feedback = ai_tutor_service.provide_feedback(user_input, target_text)
     
     # Award points for effort
     social_service.award_points(current_user.id, 10)
+    cache.clear()
     
     return jsonify(feedback)
+
+
+@router.get("/jobs/<job_id>")
+@token_required
+def get_job_status(current_user, job_id: str):
+    return jsonify(job_service.get_status(job_id))
 
 
 learning_service = UnifiedLearningService()
@@ -138,6 +174,11 @@ synonym_service = SynonymService()
 growth_service = GrowthService()
 adaptive_service = AdaptiveLearningService()
 revenue_service = RevenueService()
+assessment_service = AssessmentService()
+quiz_service = QuizService()
+progress_service = ProgressService()
+reminder_service = ReminderService()
+job_service = JobService()
 WEBHOOK_SECRET = "dev_stripe_webhook_secret"
 
 
@@ -221,6 +262,7 @@ def get_sentence_usage():
 
 
 @router.get("/synonyms/<word>")
+@cache.cached(timeout=300, query_string=True)
 def get_synonyms(word: str):
     language = request.args.get("language", "en")
     response = synonym_service.get_synonyms_by_levels(word=word, language=language)
@@ -392,13 +434,20 @@ def update_user_skills():
         user_id=str(payload["user_id"]),
         observations=observations,
     )
+    cache.delete(f"user_weak_skills:{payload['user_id']}")
     return jsonify(_json_ready(asdict(response)))
 
 
 @router.get("/user/<user_id>/weak-skills")
 def get_weak_skills(user_id: str):
+    cache_key = f"user_weak_skills:{user_id}"
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return jsonify(cached)
     response = adaptive_service.get_weak_skills(user_id=user_id)
-    return jsonify(_json_ready(asdict(response)))
+    payload = _json_ready(asdict(response))
+    cache.set(cache_key, payload, timeout=30)
+    return jsonify(payload)
 
 
 @router.post("/lesson/next")
@@ -415,4 +464,232 @@ def get_next_best_lesson():
     )
     weak_data = adaptive_service.get_weak_skills(model.user_id)
     response = adaptive_service.recommend_next_lesson(model, weak_data)
+    return jsonify(_json_ready(asdict(response)))
+
+
+@router.post("/level-test/submit")
+@token_required
+def submit_level_test(current_user):
+    payload = request.get_json(force=True)
+    required_fields = ["correct_answers", "total_questions", "average_response_seconds"]
+    for field in required_fields:
+        if field not in payload:
+            return _bad_request(f"Missing required field: {field}")
+
+    model = LevelTestSubmitRequest(
+        user_id=str(current_user.id),
+        correct_answers=int(payload["correct_answers"]),
+        total_questions=int(payload["total_questions"]),
+        average_response_seconds=float(payload["average_response_seconds"]),
+        target_language=str(payload.get("target_language", "en")),
+    )
+    try:
+        response = assessment_service.submit_level_test(model)
+    except ValueError as error:
+        return _bad_request(str(error))
+
+    current_user.cefr_level = response.cefr_level
+    db.session.add(
+        UserEvent(
+            user_id=current_user.id,
+            event_type="level_test_submitted",
+            data={"attempt_id": response.attempt_id, "cefr_level": response.cefr_level},
+        )
+    )
+    db.session.commit()
+    return jsonify(_json_ready(asdict(response)))
+
+
+@router.post("/lessons/start")
+@token_required
+def start_lesson(current_user):
+    payload = request.get_json(force=True)
+    required_fields = ["current_level", "available_minutes"]
+    for field in required_fields:
+        if field not in payload:
+            return _bad_request(f"Missing required field: {field}")
+
+    model = LessonStartRequest(
+        user_id=str(current_user.id),
+        current_level=str(payload["current_level"]).strip().lower(),
+        available_minutes=int(payload["available_minutes"]),
+    )
+    weak_data = adaptive_service.get_weak_skills(str(current_user.id))
+    next_lesson = adaptive_service.recommend_next_lesson(
+        NextLessonRequest(
+            user_id=model.user_id,
+            available_minutes=model.available_minutes,
+            current_level=model.current_level,
+        ),
+        weak_data,
+    )
+
+    session = LessonSession(
+        lesson_id=next_lesson.lesson_id,
+        user_id=current_user.id,
+        focus_topic=next_lesson.primary_focus,
+        current_level=model.current_level,
+        status="started",
+    )
+    db.session.add(session)
+    db.session.add(
+        UserEvent(
+            user_id=current_user.id,
+            event_type="lesson_started",
+            data={"lesson_id": next_lesson.lesson_id, "focus": next_lesson.primary_focus},
+        )
+    )
+    db.session.commit()
+
+    response = LessonStartResponse(
+        user_id=str(current_user.id),
+        lesson_id=next_lesson.lesson_id,
+        primary_focus=next_lesson.primary_focus,
+        total_minutes=next_lesson.total_minutes,
+        blocks=next_lesson.blocks,
+        status="started",
+    )
+    return jsonify(_json_ready(asdict(response)))
+
+
+@router.post("/quiz/submit")
+@token_required
+@limiter.limit("120 per minute")
+def submit_quiz(current_user):
+    payload = request.get_json(force=True)
+    if "lesson_id" not in payload or "results" not in payload:
+        return _bad_request("Missing required fields: lesson_id, results")
+    if not isinstance(payload["results"], list):
+        return _bad_request("results must be an array")
+
+    try:
+        results = [
+            QuizQuestionResult(
+                skill=str(item["skill"]).strip().lower(),
+                is_correct=bool(item["is_correct"]),
+                user_answer=str(item["user_answer"]),
+                expected_answer=str(item["expected_answer"]),
+                error_type=str(item.get("error_type", "accuracy")),
+            )
+            for item in payload["results"]
+        ]
+    except (KeyError, TypeError, ValueError) as error:
+        return _bad_request(f"Invalid quiz results payload: {error}")
+
+    idempotency_key = request.headers.get("Idempotency-Key")
+    cache_key = None
+    if idempotency_key:
+        cache_key = f"quiz_idempotency:{current_user.id}:{idempotency_key}"
+        cached_response = cache.get(cache_key)
+        if cached_response:
+            return jsonify(cached_response)
+
+    try:
+        quiz_model = QuizSubmitRequest(
+            user_id=str(current_user.id),
+            lesson_id=str(payload["lesson_id"]),
+            current_level=str(payload.get("current_level", current_user.cefr_level)).strip().lower(),
+            available_minutes=int(payload.get("available_minutes", 30)),
+            results=results,
+        )
+        attempt, mistakes = quiz_service.submit_quiz(
+            user_id=quiz_model.user_id,
+            lesson_id=quiz_model.lesson_id,
+            results=quiz_model.results,
+        )
+    except ValueError as error:
+        return _bad_request(str(error))
+
+    observations = [
+        SkillObservation(skill=item.skill, mistakes=item.mistakes, attempts=item.attempts)
+        for item in mistakes
+    ]
+    weak_data = adaptive_service.update_weak_skills(str(current_user.id), observations) if observations else adaptive_service.get_weak_skills(str(current_user.id))
+    next_lesson = adaptive_service.recommend_next_lesson(
+        NextLessonRequest(
+            user_id=str(current_user.id),
+            available_minutes=quiz_model.available_minutes,
+            current_level=quiz_model.current_level,
+        ),
+        weak_data,
+    )
+
+    xp_gain = (attempt.score * 10) + (5 if attempt.score == attempt.total_questions else 0)
+    progress = progress_service.award_xp_and_update_streak(str(current_user.id), xp_gain)
+    reminder = reminder_service.schedule_followup_reminder(
+        user_id=str(current_user.id),
+        reminder_type="weak_topic_followup",
+        payload={"lesson_id": next_lesson.lesson_id, "focus": next_lesson.primary_focus},
+        after_hours=24,
+    )
+
+    event_payload = {
+        "quiz_attempt_id": attempt.id,
+        "score": attempt.score,
+        "total_questions": attempt.total_questions,
+        "next_lesson_id": next_lesson.lesson_id,
+    }
+    db.session.add(
+        UserEvent(
+            user_id=current_user.id,
+            event_type="quiz_submitted",
+            data=event_payload,
+        )
+    )
+    db.session.commit()
+
+    response_payload = _json_ready(
+        {
+            "user_id": str(current_user.id),
+            "lesson_id": quiz_model.lesson_id,
+            "quiz_attempt_id": attempt.id,
+            "score": attempt.score,
+            "total_questions": attempt.total_questions,
+            "mistakes": [asdict(item) for item in mistakes],
+            "weak_skills": [asdict(item) for item in weak_data.weak_skills],
+            "next_lesson": asdict(next_lesson),
+            "progress": asdict(progress),
+            "reminder": asdict(reminder),
+        }
+    )
+    if cache_key:
+        cache.set(cache_key, response_payload, timeout=120)
+
+    cache.delete(f"user_weak_skills:{current_user.id}")
+    cache.delete(f"user_reminders:{current_user.id}:all")
+    return jsonify(response_payload)
+
+
+@router.get("/progress")
+@token_required
+def get_progress(current_user):
+    response = progress_service.get_progress(str(current_user.id))
+    return jsonify(_json_ready(asdict(response)))
+
+
+@router.get("/reminders")
+@token_required
+def get_reminders(current_user):
+    status = request.args.get("status")
+    normalized_status = status or "all"
+    cache_key = f"user_reminders:{current_user.id}:{normalized_status}"
+    cached_reminders = cache.get(cache_key)
+    if cached_reminders is not None:
+        return jsonify(cached_reminders)
+
+    reminders = reminder_service.get_user_reminders(str(current_user.id), status=status)
+    payload = _json_ready([asdict(item) for item in reminders])
+    cache.set(cache_key, payload, timeout=30)
+    return jsonify(payload)
+
+
+@router.post("/reminders/<int:reminder_id>/ack")
+@token_required
+def acknowledge_reminder(current_user, reminder_id: int):
+    try:
+        response = reminder_service.acknowledge_reminder(str(current_user.id), reminder_id)
+    except ValueError as error:
+        return _bad_request(str(error))
+    cache.delete(f"user_reminders:{current_user.id}:all")
+    cache.delete(f"user_reminders:{current_user.id}:pending")
     return jsonify(_json_ready(asdict(response)))

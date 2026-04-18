@@ -21,7 +21,7 @@ class SocialService:
 
     @staticmethod
     def award_points(user_id: int, points: int) -> bool:
-        user = User.query.get(user_id)
+        user = db.session.get(User, user_id)
         if user:
             user.points += points
             db.session.commit()
@@ -33,7 +33,7 @@ class SocialService:
         """
         Logic to check if user unlocked any badges.
         """
-        user = User.query.get(user_id)
+        user = db.session.get(User, user_id)
         achievements = []
         if user.points > 1000:
             achievements.append("Language Master")

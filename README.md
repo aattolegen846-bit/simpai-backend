@@ -37,7 +37,60 @@ You can override the port with the `PORT` environment variable, for example:
 PORT=8000 python3 app/main.py
 ```
 
+Production run (recommended):
+
+```bash
+gunicorn -c gunicorn.conf.py app.main:application
+```
+
+## Performance and scale configuration
+
+Set these environment variables for high-load balanced setup:
+
+```bash
+ENV=production
+DEBUG=false
+DATABASE_URL=postgresql+psycopg://user:pass@localhost:5432/simpai
+REDIS_URL=redis://localhost:6379/0
+CACHE_TYPE=RedisCache
+RATELIMIT_STORAGE_URI=redis://localhost:6379/1
+DB_POOL_SIZE=20
+DB_MAX_OVERFLOW=40
+```
+
+Operational endpoints:
+- `GET /health/live`
+- `GET /health/ready`
+- `GET /metrics`
+
+Async/offload endpoints:
+- `POST /api/v1/ai/explain` with `{ "async": true, ... }` returns `202` with `job_id`
+- `POST /api/v1/ai/feedback` with `{ "async": true, ... }` returns `202` with `job_id`
+- `GET /api/v1/jobs/{job_id}` checks job state
+
+## Database migration workflow
+
+```bash
+python3 -m flask --app app.main:application db init
+python3 -m flask --app app.main:application db migrate -m "schema update"
+python3 -m flask --app app.main:application db upgrade
+```
+
+## Load testing
+
+Run a quick load test:
+
+```bash
+locust -f tests/perf_locust.py --host http://127.0.0.1:5001
+```
+
 ## API Endpoints
+
+- `POST /api/v1/auth/register` and `POST /api/v1/auth/login`
+  - Registers user and returns JWT token for protected routes.
+
+- `GET /api/v1/social/leaderboard`
+  - Returns top users ranked by points.
 
 - `POST /api/v1/lesson/unified`
   - Builds a combined lesson track from Duolingo + Alem + Edvibe style units.
@@ -83,6 +136,38 @@ PORT=8000 python3 app/main.py
 
 - `POST /api/v1/lesson/next`
   - Recommends the next best lesson plan based on weak skills and available time.
+
+- `POST /api/v1/level-test/submit` (auth required)
+  - Stores level-test result, computes CEFR, and proposes first focus area.
+
+- `POST /api/v1/lessons/start` (auth required)
+  - Starts a lesson session and returns a focused lesson plan.
+
+- `POST /api/v1/quiz/submit` (auth required)
+  - Stores quiz attempt, tracks mistakes, updates weak-topic profile, generates weak-topic next lesson, updates XP + streak, and schedules in-app reminder.
+
+- `GET /api/v1/progress` (auth required)
+  - Returns user XP, streak days, and last activity date.
+
+- `GET /api/v1/reminders` and `POST /api/v1/reminders/{id}/ack` (auth required)
+  - Fetches in-app reminders and marks reminder as acknowledged.
+
+## Automation flow (login -> reminder)
+
+1. Login and get JWT (`/auth/login`)
+2. Submit level test (`/level-test/submit`)
+3. Start lesson (`/lessons/start`)
+4. Submit quiz (`/quiz/submit`)
+5. Backend automatically:
+   - stores mistake events,
+   - recomputes weak topics,
+   - recommends weak-topic next lesson,
+   - updates XP and streak,
+   - creates in-app follow-up reminder.
+
+Reminder semantics:
+- In-app reminders are persisted and exposed via `GET /api/v1/reminders`.
+- Client fetches reminders by polling; no push channel is used in this backend.
 
 ## Quick examples
 
